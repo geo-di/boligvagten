@@ -123,6 +123,15 @@ def test_notify_new_tags_highlights_and_lists_best_first(monkeypatch):
     assert sent["click"] == "https://x.dk/3"
 
 
+def _fake_fetch(batches):
+    """fetch_enabled stand-in: next batch, recording its source like the real one."""
+    def fetch(_cfg, state=None):
+        if state is not None:
+            state["sources"].setdefault("x", {})
+        return batches.pop(0), 1
+    return fetch
+
+
 def test_check_once_deep_filters_new_listings(tmp_path, monkeypatch):
     """description_keywords gates the alert but never the seen-state."""
     cfg = types.SimpleNamespace(
@@ -144,7 +153,7 @@ def test_check_once_deep_filters_new_listings(tmp_path, monkeypatch):
          _listing(id="x:plain", description="ingen udenomsplads"),
          _listing(id="x:hit", description="skøn altan mod vest")],
     ]
-    monkeypatch.setattr(monitor, "fetch_enabled", lambda _cfg: (batches.pop(0), 1))
+    monkeypatch.setattr(monitor, "fetch_enabled", _fake_fetch(batches))
 
     assert monitor.check_once(cfg) == 1   # baseline run — no alert
     assert monitor.check_once(cfg) == 1   # new but keyword-less — silenced
@@ -163,7 +172,7 @@ def test_notification_failure_retries_before_marking_seen(tmp_path, monkeypatch)
         [_listing(id="x:base"), _listing(id="x:new")],
         [_listing(id="x:base"), _listing(id="x:new")],
     ]
-    monkeypatch.setattr(monitor, "fetch_enabled", lambda _cfg: (batches.pop(0), 1))
+    monkeypatch.setattr(monitor, "fetch_enabled", _fake_fetch(batches))
     outcomes = iter([False, True])
     attempts = []
 
@@ -184,7 +193,7 @@ def test_empty_first_check_is_still_an_initialized_baseline(tmp_path, monkeypatc
     cfg = types.SimpleNamespace(FILTERS={}, SOURCES={})
     monkeypatch.setattr(monitor, "STATE_FILE", tmp_path / "seen.json")
     batches = [[], [_listing(id="x:first")]]
-    monkeypatch.setattr(monitor, "fetch_enabled", lambda _cfg: (batches.pop(0), 1))
+    monkeypatch.setattr(monitor, "fetch_enabled", _fake_fetch(batches))
     notified = []
     monkeypatch.setattr(
         monitor, "notify_new", lambda items, _cfg: notified.append(items) or True
@@ -208,6 +217,152 @@ def test_parser_health_failure_does_not_count_as_a_success(monkeypatch, capsys):
     cfg = types.SimpleNamespace(FILTERS={}, SOURCES={})
     assert monitor.fetch_enabled(cfg) == ([], 0)
     assert "parser health check failed" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- per-source scheduling
+
+def _source(key, batches, deep_check=None):
+    """A fake source module serving one batch of listing ids per fetch."""
+    calls = []
+
+    def fetch(_conf):
+        calls.append(1)
+        return [_listing(source=key, id=f"{key}:{i}") for i in batches.pop(0)]
+
+    mod = types.SimpleNamespace(KEY=key, LABEL=key.upper(), fetch=fetch, calls=calls)
+    if deep_check:
+        mod.deep_check = deep_check
+    return mod
+
+
+def _watch(tmp_path, monkeypatch, *mods_and_confs):
+    monkeypatch.setattr(monitor, "STATE_FILE", tmp_path / "seen.json")
+    monkeypatch.setattr(monitor.sources, "enabled", lambda _cfg: list(mods_and_confs))
+    notified = []
+    monkeypatch.setattr(monitor, "notify_new",
+                        lambda items, _cfg: notified.append([i.id for i in items]) or True)
+    return types.SimpleNamespace(FILTERS={}, SOURCES={}), notified
+
+
+def _age_last_fetch(key, hours):
+    from datetime import datetime, timedelta
+
+    state = monitor.load_state()
+    state["sources"][key]["last_fetched"] = (
+        datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+    monitor.save_state(state)
+
+
+def test_min_interval_hours_checks_a_slow_source_once_a_day(tmp_path, monkeypatch):
+    fast = _source("x", [[1], [1], [1, 2]])
+    slow = _source("sdk", [[10], [10, 11]])
+    cfg, notified = _watch(tmp_path, monkeypatch,
+                           (fast, {}), (slow, {"min_interval_hours": 24}))
+
+    monitor.check_once(cfg)                      # baseline: both fetched
+    assert monitor.check_once(cfg) == 0          # sdk not due — skipped, not "offline"
+    assert (len(fast.calls), len(slow.calls)) == (2, 1)
+    _age_last_fetch("sdk", 25)
+    monitor.check_once(cfg)                      # a day later: sdk is due again
+    assert (len(fast.calls), len(slow.calls)) == (3, 2)
+    assert sorted(notified[0]) == ["sdk:11", "x:2"]
+
+
+def test_only_slow_sources_skipped_is_not_offline_but_all_failing_is(tmp_path, monkeypatch):
+    slow = _source("sdk", [[10]])
+    cfg, _ = _watch(tmp_path, monkeypatch, (slow, {"min_interval_hours": 24}))
+    assert monitor.check_once(cfg) == 1
+    assert monitor.check_once(cfg) == 0          # nothing due → still a normal cycle
+
+    def broken(_conf):
+        raise OSError("offline")
+
+    down = types.SimpleNamespace(KEY="x", LABEL="X", fetch=broken)
+    monkeypatch.setattr(monitor.sources, "enabled",
+                        lambda _cfg: [(down, {}), (slow, {"min_interval_hours": 24})])
+    assert monitor.check_once(cfg) is None       # the one source asked failed → offline
+
+
+def test_source_enabled_after_first_run_records_a_silent_baseline(tmp_path, monkeypatch):
+    old = _source("x", [[1], [1], [1]])
+    cfg, notified = _watch(tmp_path, monkeypatch, (old, {}))
+    monitor.check_once(cfg)                      # first run: x is the baseline
+
+    new = _source("sdk", [list(range(244)), list(range(245))])
+    monkeypatch.setattr(monitor.sources, "enabled", lambda _cfg: [(old, {}), (new, {})])
+    monitor.check_once(cfg)                      # sdk's 244 existing buildings: no alert
+    assert notified == []
+    monitor.check_once(cfg)                      # a genuinely new building alerts
+    assert notified == [["sdk:244"]]
+
+
+def test_state_without_source_bookkeeping_keeps_alerting(tmp_path, monkeypatch):
+    # Written before per-source bookkeeping: no "sources" entry at all.
+    (tmp_path / "seen.json").write_text(json.dumps(
+        {"version": monitor.STATE_VERSION, "initialized": True, "seen": ["x:1"], "actions": {}}))
+    cfg, notified = _watch(tmp_path, monkeypatch, (_source("x", [[1, 2]]), {}))
+    monitor.check_once(cfg)
+    assert notified == [["x:2"]]                 # overlaps seen → not a new source
+    assert "last_fetched" in monitor.load_state()["sources"]["x"]
+
+
+def test_source_deep_check_drops_new_listings_but_remembers_them(tmp_path, monkeypatch):
+    checked = []
+
+    def deep_check(listing, conf):
+        checked.append(listing.id)
+        return listing.id != "sdk:2" or not conf["strict"]
+
+    src = _source("sdk", [[1], [1, 2, 3]], deep_check=deep_check)
+    cfg, notified = _watch(tmp_path, monkeypatch, (src, {"strict": True}))
+    monitor.check_once(cfg)
+    assert checked == []                         # baseline: no per-building fetches
+    monitor.check_once(cfg)
+    assert checked == ["sdk:2", "sdk:3"]         # only the new ones
+    assert notified == [["sdk:3"]]
+    assert {"sdk:2", "sdk:3"} <= monitor.load_seen()
+
+
+def test_failed_delivery_refetches_a_slow_source_next_poll(tmp_path, monkeypatch):
+    slow = _source("sdk", [[1], [1, 2], [1, 2]])
+    cfg, _ = _watch(tmp_path, monkeypatch, (slow, {"min_interval_hours": 24}))
+    monitor.check_once(cfg)
+    _age_last_fetch("sdk", 25)
+    outcomes = iter([False, True])
+    monkeypatch.setattr(monitor, "notify_new", lambda items, _cfg: next(outcomes))
+    monitor.check_once(cfg)                      # sdk:2 found, push fails
+    assert "sdk:2" not in monitor.load_seen()
+    monitor.check_once(cfg)                      # retried right away, not in 24 h
+    assert len(slow.calls) == 3
+    assert "sdk:2" in monitor.load_seen()
+
+
+def test_use_global_filters_false_gives_a_source_only_its_own_filters(monkeypatch):
+    def src(key):
+        listing = _listing(source=key, id=f"{key}:1", price_dkk=2500, rooms=1,
+                           address="Kapelvej 52-56, 2200")
+        return types.SimpleNamespace(KEY=key, LABEL=key, fetch=lambda _c: [listing])
+
+    flat, dorm, capped = src("flat"), src("sdk"), src("cap")
+    monkeypatch.setattr(monitor.sources, "enabled", lambda _cfg: [
+        (flat, {}),
+        (dorm, {"use_global_filters": False}),
+        (capped, {"use_global_filters": False, "filters": {"max_price_dkk": 2000}}),
+    ])
+    cfg = types.SimpleNamespace(
+        FILTERS={"min_price_dkk": 7000, "min_rooms": 3,
+                 "description_keywords": ["altan"]},
+        SOURCES={},
+    )
+    items, ok = monitor.fetch_enabled(cfg)
+    assert ok == 3
+    assert [it.id for it in items] == ["sdk:1"]   # global floor skipped; own cap still bites
+    # The global description_keywords must not fetch its page or drop it either.
+    fetched = []
+    monkeypatch.setattr("boligvagten.sources.base.fetch_description",
+                        lambda it: fetched.append(it.id) or "no balcony here")
+    assert [it.id for it in monitor.deep_filter(items, cfg)] == ["sdk:1"]
+    assert fetched == []
 
 
 def _contact_cfg(**sites):

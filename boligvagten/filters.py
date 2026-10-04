@@ -1,7 +1,8 @@
 """Config-driven listing filters, applied after parsing — same rules for every source.
 
 Two layers, both optional:
-  * the global FILTERS dict in config.py (applies to everything)
+  * the global FILTERS dict in config.py (applies to everything, except
+    sources whose SOURCES entry sets "use_global_filters": False)
   * a per-source "filters" dict inside a SOURCES entry (applies on top)
 
 Supported keys:
@@ -70,14 +71,15 @@ def apply(listings, *filter_dicts):
 
 
 def deep_apply(listings, global_filters=None, per_source=None,
-               fetcher=None, max_fetches=10):
+               fetcher=None, max_fetches=10, skip_global=()):
     """Apply description_keywords — the one filter that may cost an HTTP fetch.
 
     Listings whose source ships the description inline (Boligsiden) are free;
     for the rest the listing page is fetched once (result cached on the
     listing), at most `max_fetches` per call. Call this on *new* listings
     after the seen-diff, not on every poll result. Fail-open throughout: no
-    description obtainable → the listing stays.
+    description obtainable → the listing stays. Sources in `skip_global`
+    only answer to their own per-source filters.
     """
     per_source = per_source or {}
     if fetcher is None:
@@ -85,7 +87,8 @@ def deep_apply(listings, global_filters=None, per_source=None,
     budget = max_fetches
     out = []
     for it in listings:
-        active = [f for f in (global_filters, per_source.get(it.source))
+        own_global = None if it.source in skip_global else global_filters
+        active = [f for f in (own_global, per_source.get(it.source))
                   if f and f.get("description_keywords")]
         if not active:
             out.append(it)

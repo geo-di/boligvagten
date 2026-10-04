@@ -13,6 +13,8 @@ need changes for typical tweaks.
 # traffic pattern looks human. 30–60s is fast enough to be among the first
 # for nearly every listing while remaining reasonable for the sites. Avoid
 # lowering it further — hammering the sites helps nobody.
+# A slow-moving source can be checked less often: give its SOURCES entry
+# "min_interval_hours" (see "sdk" below).
 POLL_MIN_SECONDS = 30
 POLL_MAX_SECONDS = 60
 
@@ -118,6 +120,31 @@ SOURCES = {
         "filters": {
             "max_price_dkk": 20000,   # Kereby skews expensive
         },
+    },
+
+    # s.dk (mit.s.dk/studiebolig) — student housing in Copenhagen and on
+    # Zealand (CIU, RIU-Roskilde, Agora). Alerts when a NEW BUILDING appears,
+    # so you can join its waiting list on day one. Rooms are offered by
+    # waiting-list rules, so being first means signing up early, not jumping
+    # the queue — sign up on the building's page the alert links to.
+    # Getting your URL: none to customize — this is the public building
+    # search API behind s.dk's new app, and it lists every building.
+    # Narrow it with "filters" instead (max_price_dkk = cheapest rent,
+    # min_rooms = smallest room type, include_keywords = zip codes like
+    # ", 2200" — addresses read "Kapelvej 52-56, 2200").
+    # Your apartment FILTERS (rent floor, room count, "studiebolig" excluded…)
+    # would drop every dorm, so this source skips them and uses only its own.
+    # Off by default: student housing only suits students.
+    "sdk": {
+        "enabled": False,
+        "url": "https://mit.s.dk/api/v2/public/buildings/search/?page_size=100",
+        "use_global_filters": False,    # only "filters" below apply, not FILTERS
+        "filters": {},
+        "min_interval_hours": 24,       # s.dk changes slowly — check once a day
+        "private_kitchen_bath": False,  # True: only buildings listing "Eget køkken"
+                                        # AND "Eget bad" = ja (checked once per new
+                                        # building; unknown → still alerts)
+        # "max_pages": 5,               # 100 buildings per page
     },
 
     # Boligsiden (boligsiden.dk) — the FOR-SALE market: ejerlejligheder,

@@ -213,6 +213,7 @@ affected site's attention.
 | `cej` | udlejning.cej.dk | rent | Zealand / Copenhagen | Remix data endpoint |
 | `kereby` | kereby.dk | rent | Copenhagen | public JSON API |
 | `cityapartment` | cityapartment.dk | rent | Copenhagen | server-rendered HTML |
+| `sdk` | mit.s.dk | student housing (new buildings, daily) | Copenhagen / Zealand | public JSON API |
 | `boligsiden` | boligsiden.dk | **sale** | all of Denmark | public JSON API |
 
 Want another site? That's the fun part — see

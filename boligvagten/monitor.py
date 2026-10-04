@@ -111,7 +111,8 @@ def run_onboarding(cfg):
 
 
 def _empty_state():
-    return {"version": STATE_VERSION, "initialized": False, "seen": set(), "actions": {}}
+    return {"version": STATE_VERSION, "initialized": False, "seen": set(), "actions": {},
+            "sources": {}}
 
 
 def _decode_state(raw):
@@ -124,6 +125,7 @@ def _decode_state(raw):
             "initialized": True,
             "seen": set(raw),
             "actions": {},
+            "sources": {},
         }
     if not isinstance(raw, dict) or raw.get("version") != STATE_VERSION:
         raise ValueError(f"unsupported state format (expected version {STATE_VERSION})")
@@ -135,11 +137,16 @@ def _decode_state(raw):
         isinstance(key, str) and isinstance(value, dict) for key, value in actions.items()
     ):
         raise ValueError("state 'actions' must be an object")
+    # Per-source bookkeeping ({key: {"last_fetched": iso}}); absent in older files.
+    srcs = raw.get("sources", {})
+    if not isinstance(srcs, dict) or not all(isinstance(v, dict) for v in srcs.values()):
+        raise ValueError("state 'sources' must be an object")
     return {
         "version": STATE_VERSION,
         "initialized": bool(raw.get("initialized", True)),
         "seen": set(seen),
         "actions": actions,
+        "sources": srcs,
     }
 
 
@@ -207,6 +214,7 @@ def save_state(state):
         "initialized": bool(state.get("initialized")),
         "seen": sorted(state["seen"]),
         "actions": state["actions"],
+        "sources": state.get("sources", {}),
     }
     if STATE_FILE.exists():
         previous = STATE_FILE.read_text()
@@ -398,24 +406,51 @@ def process_action_outbox(cfg, state):
 # ---------- Core check ----------
 
 
-def fetch_enabled(cfg):
-    """Fetch + filter every enabled source. Returns (listings, ok_count)."""
+def source_due(conf, src_state, now=None):
+    """False while a source's `min_interval_hours` hasn't passed since its last fetch."""
+    hours = conf.get("min_interval_hours")
+    last = (src_state or {}).get("last_fetched")
+    if not hours or not last:
+        return True
+    try:
+        elapsed = ((now or datetime.now()) - datetime.fromisoformat(last)).total_seconds()
+    except (TypeError, ValueError):
+        return True
+    return elapsed >= hours * 3600
+
+
+def fetch_enabled(cfg, state=None):
+    """Fetch + filter every enabled source. Returns (listings, ok_count).
+
+    With `state` (the watch loop), sources whose `min_interval_hours` hasn't
+    passed are skipped and successful fetches are timestamped in
+    state["sources"]. A skipped source isn't a failure: ok_count is 0 only
+    when every source actually asked failed.
+    """
     global_filters = getattr(cfg, "FILTERS", None)
     stamp = datetime.now().isoformat(timespec="seconds")
-    all_items, ok_count = [], 0
+    all_items, ok_count, asked = [], 0, 0
     for mod, conf in sources.enabled(getattr(cfg, "SOURCES", {})):
+        if state is not None and not source_due(conf, state["sources"].get(mod.KEY)):
+            continue
+        asked += 1
         try:
             items = mod.fetch(conf)
-            kept = filters.apply(items, global_filters, conf.get("filters"))
+            own_global = global_filters if conf.get("use_global_filters", True) else None
+            kept = filters.apply(items, own_global, conf.get("filters"))
             dropped = len(items) - len(kept)
             note = f" ({dropped} filtered out)" if dropped else ""
             print(f"[{stamp}] {mod.LABEL}: {len(kept)} listings{note}", flush=True)
             all_items.extend(kept)
             ok_count += 1
+            if state is not None:
+                state["sources"].setdefault(mod.KEY, {})["last_fetched"] = stamp
         except sources.ParserHealthError as e:
             print(f"[{stamp}] {mod.LABEL}: parser health check failed — {e}", flush=True)
         except Exception as e:
             print(f"[{stamp}] {mod.LABEL}: fetch failed — {e}", flush=True)
+    if not asked:
+        return all_items, 1  # nothing due this poll — not offline
     return all_items, ok_count
 
 
@@ -424,16 +459,55 @@ def per_source_filters(cfg):
             for mod, conf in sources.enabled(getattr(cfg, "SOURCES", {}))}
 
 
+def deep_filter(items, cfg):
+    """description_keywords on top of the cheap filters, honouring use_global_filters."""
+    skip = {mod.KEY for mod, conf in sources.enabled(getattr(cfg, "SOURCES", {}))
+            if not conf.get("use_global_filters", True)}
+    return filters.deep_apply(items, getattr(cfg, "FILTERS", None), per_source_filters(cfg),
+                              skip_global=skip)
+
+
+def source_checks(items, cfg):
+    """Run a source's optional deep_check(listing, conf) on new listings — False drops one."""
+    hooks = {mod.KEY: (mod.deep_check, conf)
+             for mod, conf in sources.enabled(getattr(cfg, "SOURCES", {}))
+             if hasattr(mod, "deep_check")}
+    return [it for it in items
+            if it.source not in hooks or hooks[it.source][0](it, hooks[it.source][1])]
+
+
+def baseline_new_sources(current, state, known_sources):
+    """Silently record a source's listings the first time it's fetched after the first run.
+
+    Without this, enabling a source on an existing install alerts on every
+    listing it has. A source counts as new when it had no bookkeeping entry
+    and none of its listings were seen before (state files written before
+    per-source bookkeeping have no entries, but their sources overlap `seen`).
+    """
+    by_source = {}
+    for listing_id, it in current.items():
+        by_source.setdefault(it.source, []).append(listing_id)
+    for src, ids in by_source.items():
+        if src in known_sources or any(i in state["seen"] for i in ids):
+            continue
+        print(f"[{src}] first fetch — recording {len(ids)} listing(s) as baseline (no alerts).",
+              flush=True)
+        state["seen"].update(ids)
+
+
 def check_once(cfg):
     state = load_state()
     process_action_outbox(cfg, state)
-    all_items, ok_count = fetch_enabled(cfg)
+    known_sources = set(state["sources"])
+    all_items, ok_count = fetch_enabled(cfg, state)
     if ok_count == 0:
         # Every source failed — assume offline; don't touch state.
         return None
 
-    seen = state["seen"]
     current = {it.id: it for it in all_items}
+    if state["initialized"]:
+        baseline_new_sources(current, state, known_sources)
+    seen = state["seen"]
     new_ids = [i for i in current if i not in seen]
 
     stamp = datetime.now().isoformat(timespec="seconds")
@@ -446,10 +520,7 @@ def check_once(cfg):
     if new_ids and state["initialized"]:
         # description_keywords runs here — only new listings, so a lazy page
         # fetch per listing stays cheap. Dropped ones still land in "seen".
-        fresh = filters.deep_apply(
-            [current[i] for i in new_ids],
-            getattr(cfg, "FILTERS", None), per_source_filters(cfg),
-        )
+        fresh = deep_filter(source_checks([current[i] for i in new_ids], cfg), cfg)
         fresh_ids = {it.id for it in fresh}
         # Deep-filter rejections are deliberately acknowledged; notification
         # failures are not, so those listings retry on the next poll.
@@ -458,6 +529,9 @@ def check_once(cfg):
             queue_actions(fresh, cfg, state)
             state["seen"].update(fresh_ids)
         elif fresh:
+            # Their sources must be fetched again next poll, min_interval_hours or not.
+            for it in fresh:
+                state["sources"].get(it.source, {}).pop("last_fetched", None)
             print(
                 f"[notify] delivery failed; {len(fresh)} listing(s) remain pending "
                 "and will retry on the next poll.",
@@ -479,7 +553,7 @@ def check_once(cfg):
 def collect_listings(cfg):
     """Fetch everything now and apply all filters — rows sorted for display."""
     rows, _ = fetch_enabled(cfg)
-    rows = filters.deep_apply(rows, getattr(cfg, "FILTERS", None), per_source_filters(cfg))
+    rows = deep_filter(rows, cfg)
     # Rentals first (cheapest up), then for-sale (cash prices would dwarf rents).
     rows.sort(key=lambda it: (it.deal != "rent", it.price_dkk is None, it.price_dkk or 0))
     return rows

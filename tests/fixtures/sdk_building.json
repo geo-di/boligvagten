@@ -1,0 +1,12 @@
+{
+ "pk": 4,
+ "name": "Blegdammen",
+ "zipcode": 4000,
+ "desc_address": "Blegdammen 17-19",
+ "app_committee": {
+  "pk": 2,
+  "name": "RIU-Roskilde",
+  "abbreviation": "RIU"
+ },
+ "description": "<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"417\" style=\"width: 416px;\"><tbody><tr height=\"20\"><td height=\"20\" class=\"xl66\" style=\"width: 63.7019%;\">Eget køkken<br></td>\n            \n            \n            <td class=\"xl72\">\n            \n            \n            &nbsp;ja<br></td>\n        </tr>\n        <tr height=\"20\">\n            <td height=\"20\" class=\"xl66\">Fælles køkken</td>\n            \n            \n            <td class=\"xl72\">\n            \n            \n            &nbsp;nej&nbsp;<br></td>\n        </tr>\n        <tr height=\"20\">\n            <td height=\"20\" class=\"xl66\">Eget\n                toilet<span>&nbsp;</span></td>\n            \n            \n            <td class=\"xl72\">&nbsp;ja</td>\n        </tr>\n        <tr height=\"20\">\n            <td height=\"20\" class=\"xl66\">Eget bad</td>\n            \n            \n            <td class=\"xl72\">&nbsp;ja&nbsp;<div style=\"color:rgba(0,0,0,0.01);width:0;height:0\">&nbsp;<br></div></td>\n        </tr>\n\n    </tbody>\n</table><p><br></p>"
+}
