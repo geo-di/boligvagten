@@ -338,12 +338,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def _guard(self, query):
         if not self._host_ok():
-            self._send(403, {"error": "bad_host"})
+            self._reject(403, {"error": "bad_host"})
             return False
         if not self._token_ok(query):
-            self._send(403, {"error": "bad_token"})
+            self._reject(403, {"error": "bad_token"})
             return False
         return True
+
+    def _reject(self, status, payload):
+        # Read the unread request body first: closing a socket with unread data
+        # makes Windows reset the connection, and the client never sees the reply.
+        length = int(self.headers.get("Content-Length") or 0)
+        if 0 < length <= MAX_BODY_BYTES:
+            self.rfile.read(length)
+        self._send(status, payload)
 
     def _json_body(self):
         if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
