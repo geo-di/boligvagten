@@ -73,6 +73,10 @@ def test_saved_settings_round_trip_through_validate(home):
          "SOURCES.nosuchsite", "unknown_source"),
         (lambda d: d.update(EVIL=1), "EVIL", "unknown_key"),
         (lambda d: d["NTFY"].update(topic="has space"), "NTFY.topic", "bad_topic"),
+        (lambda d: d["SOURCES"]["sdk"].update(min_interval_hours="daily"),
+         "SOURCES.sdk.min_interval_hours", "not_a_number"),
+        (lambda d: d["SOURCES"]["sdk"].update(private_kitchen_bath="yes"),
+         "SOURCES.sdk.private_kitchen_bath", "bad_type"),
     ],
 )
 def test_validate_rejects_bad_values(home, mutate, field, code):
@@ -81,6 +85,25 @@ def test_validate_rejects_bad_values(home, mutate, field, code):
     with pytest.raises(settings.SettingsError) as exc:
         settings.validate(data)
     assert (exc.value.field, exc.value.code) == (field, code)
+
+
+def test_sdk_options_survive_a_save_from_the_page(home):
+    data = settings.load_or_seed()
+    assert data["SOURCES"]["sdk"]["min_interval_hours"] == 24   # from config.example.py
+    assert data["SOURCES"]["sdk"]["use_global_filters"] is False
+    data["SOURCES"]["sdk"].update(enabled=True, private_kitchen_bath=True)
+    out = settings.validate(data)
+    assert out["SOURCES"]["sdk"]["min_interval_hours"] == 24
+    assert out["SOURCES"]["sdk"]["private_kitchen_bath"] is True
+
+
+def test_source_added_after_settings_were_saved_gets_example_defaults_switched_off(home):
+    data = settings.load_or_seed()
+    del data["SOURCES"]["sdk"]                   # a settings.json from before sdk existed
+    settings.save(data)
+    sdk = settings.load_or_seed()["SOURCES"]["sdk"]
+    assert sdk["enabled"] is False
+    assert sdk["urls"] and sdk["min_interval_hours"] == 24
 
 
 def test_disabled_source_may_have_no_or_unfinished_url(home):

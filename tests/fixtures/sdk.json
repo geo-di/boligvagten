@@ -1,0 +1,64 @@
+{
+ "results": [
+  {
+   "pk": 4,
+   "name": "Blegdammen",
+   "desc_address": "Blegdammen 17-19",
+   "zipcode": "4000",
+   "committee_abbreviation": "RIU",
+   "committee_name": "RIU-Roskilde",
+   "tenancies_count": 12,
+   "rooms": [
+    1
+   ],
+   "min_rent": 1836.0,
+   "max_rent": 2787.0
+  },
+  {
+   "pk": 5,
+   "name": "Ågården",
+   "desc_address": "Kapelvej 52-56",
+   "zipcode": "2200",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 43,
+   "rooms": [
+    1,
+    2
+   ],
+   "min_rent": 2474.0,
+   "max_rent": 5464.0
+  },
+  {
+   "pk": 262,
+   "name": "Nordbro",
+   "desc_address": "Borgmestervangen 5-31",
+   "zipcode": "2200",
+   "committee_abbreviation": "Agora",
+   "committee_name": "Agora",
+   "tenancies_count": 290,
+   "rooms": [
+    1,
+    2
+   ],
+   "min_rent": 6210.0,
+   "max_rent": 9640.0
+  },
+  {
+   "pk": 453253,
+   "name": "Generationerne Byhus - Ørestad",
+   "desc_address": "Robert Jacobsens Vej 48G",
+   "zipcode": "2300",
+   "committee_abbreviation": "CIU",
+   "committee_name": "CIU - Centralindstillingsudvalget",
+   "tenancies_count": 32,
+   "rooms": [
+    1,
+    2
+   ],
+   "min_rent": 5825.0,
+   "max_rent": 8948.0
+  }
+ ],
+ "count": 244
+}

@@ -144,7 +144,7 @@ def test_search_returns_rows(running, monkeypatch):
     app, port = running
     row = Listing(source="x", id="x:1", name="n", address="Gade 1", rooms=2,
                   size_m2=50, price_dkk=9000, url="https://x.dk/1")
-    monkeypatch.setattr(monitor, "fetch_enabled", lambda cfg: ([row], 1))
+    monkeypatch.setattr(monitor, "fetch_enabled", lambda cfg, state=None: ([row], 1))
     status, body = call(port, "/api/search", body={}, token=app.token)
     assert status == 200
     assert body["listings"][0]["address"] == "Gade 1"

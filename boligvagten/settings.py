@@ -41,7 +41,8 @@ FILTER_INT_KEYS = (
     "max_monthly_fee_dkk",
 )
 FILTER_LIST_KEYS = ("exclude_keywords", "include_keywords", "description_keywords")
-SOURCE_KEYS = ("enabled", "urls", "filters", "max_pages")
+SOURCE_KEYS = ("enabled", "urls", "filters", "max_pages", "min_interval_hours",
+               "private_kitchen_bath", "use_global_filters")
 NTFY_KEYS = ("enabled", "server", "topic")
 
 # ntfy's own topic rule.
@@ -110,8 +111,10 @@ def _normalize_source(conf):
         "urls": list(conf.get("urls") or ([conf["url"]] if conf.get("url") else [])),
         "filters": _normalize_filters(conf.get("filters")),
     }
-    if conf.get("max_pages") is not None:
-        out["max_pages"] = conf["max_pages"]
+    for key in ("max_pages", "min_interval_hours", "private_kitchen_bath",
+                "use_global_filters"):
+        if conf.get(key) is not None:
+            out[key] = conf[key]
     return out
 
 
@@ -121,7 +124,15 @@ def normalize(data, base=None):
     out = {k: copy.deepcopy(data.get(k, base.get(k))) for k in KEYS}
     out["FILTERS"] = _normalize_filters(out["FILTERS"])
     src_in = out["SOURCES"] or {}
-    out["SOURCES"] = {mod.KEY: _normalize_source(src_in.get(mod.KEY)) for mod in sources.REGISTRY}
+    base_src = base.get("SOURCES") or {}
+    out["SOURCES"] = {}
+    for mod in sources.REGISTRY:
+        conf = src_in.get(mod.KEY)
+        if conf is None and src_in:
+            # A source added since these settings were saved: the example's
+            # address and options, switched off until the user turns it on.
+            conf = dict(base_src.get(mod.KEY) or {}, enabled=False)
+        out["SOURCES"][mod.KEY] = _normalize_source(conf)
     ntfy = dict(base.get("NTFY") or {})
     ntfy.update(out["NTFY"] or {})
     out["NTFY"] = {k: ntfy.get(k) for k in NTFY_KEYS}
@@ -241,6 +252,13 @@ def validate(data):
         _check_filters(conf.get("filters") or {}, f"{field}.filters")
         if "max_pages" in conf:
             _check_int(conf["max_pages"], f"{field}.max_pages", allow_none=False)
+        hours = conf.get("min_interval_hours")
+        if hours is not None and (isinstance(hours, bool) or not isinstance(hours, (int, float))
+                                  or hours < 0):
+            raise SettingsError(f"{field}.min_interval_hours", "not_a_number")
+        for flag in ("private_kitchen_bath", "use_global_filters"):
+            if not isinstance(conf.get(flag, False), bool):
+                raise SettingsError(f"{field}.{flag}", "bad_type")
 
     ntfy = data.get("NTFY") or {}
     _check_keys(ntfy, NTFY_KEYS, "NTFY")

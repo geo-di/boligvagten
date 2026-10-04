@@ -80,8 +80,8 @@ class Listing:
     amenities: frozenset = frozenset()  # AMENITY_LABELS keys, from structured site data
 
 
-def http_get(url, timeout=30):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+def http_get(url, timeout=30, user_agent=USER_AGENT):
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8")
 

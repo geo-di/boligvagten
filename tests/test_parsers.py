@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from boligvagten.sources import boligportal, boligsiden, cej, cityapartment, kereby
+from boligvagten.sources import boligportal, boligsiden, cej, cityapartment, kereby, sdk
 from boligvagten.sources.base import Listing, ParserHealthError
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -267,3 +267,106 @@ def test_kereby_parse_rejects_garbage():
         kereby.parse('{"unexpected": []}')
     with pytest.raises(ParserHealthError, match="without a stable ID"):
         kereby.parse('{"items": [{"classification": "Residential"}]}')
+
+
+# ---------------------------------------------------------------- s.dk
+
+def test_sdk_parse_fields():
+    items = sdk.parse(load("sdk.json"))
+    assert [it.id for it in items] == ["sdk:4", "sdk:5", "sdk:262", "sdk:453253"]
+    assert items[1] == Listing(
+        source="sdk",
+        id="sdk:5",
+        name="Ågården",
+        address="Kapelvej 52-56, 2200",
+        rooms=1,             # smallest of the building's room types [1, 2]
+        size_m2=None,
+        price_dkk=2474,      # lowest rent of "2474 - 5464 DKK/month"
+        url="https://mit.s.dk/studiebolig/building/5/",
+    )
+
+
+def test_sdk_empty_page_parses_to_nothing():
+    # A page past the end, as s.dk really returns it.
+    assert sdk.parse(load("sdk_empty.json")) == []
+
+
+def test_sdk_parse_rejects_garbage():
+    with pytest.raises(json.JSONDecodeError):
+        sdk.parse("<html>maintenance</html>")
+    with pytest.raises(ParserHealthError, match="no 'results'"):
+        sdk.parse('{"detail": "Not found."}')
+
+
+def test_sdk_fetch_walks_every_page_politely(monkeypatch):
+    page1 = load("sdk.json")
+    last = json.dumps({"count": 5, "results": [{"pk": 999, "name": "Ny", "rooms": [1]}]})
+    pages = {"1": page1.replace('"count": 244', '"count": 5'), "2": last}
+    calls = []
+
+    def fake_get(url, timeout=30, user_agent=None):
+        calls.append((url, user_agent))
+        return pages[url.rsplit("page=", 1)[1]]
+
+    monkeypatch.setattr(sdk, "http_get", fake_get)
+    items = sdk.fetch({"url": sdk.SEARCH_URL})
+    assert [it.id for it in items][-1] == "sdk:999"   # new buildings land on the last page
+    assert [u for u, _ in calls] == [
+        "https://mit.s.dk/api/v2/public/buildings/search/?page_size=100&page=1",
+        "https://mit.s.dk/api/v2/public/buildings/search/?page_size=100&page=2",
+    ]   # stopped at count — no request for an empty page 3
+    assert all(ua.startswith("boligvagten/") for _, ua in calls)
+
+
+def test_sdk_fetch_stops_on_empty_page_and_respects_max_pages(monkeypatch):
+    bodies = []
+
+    def serve(fixture):
+        return lambda url, **kw: bodies.append(url) or load(fixture)
+
+    monkeypatch.setattr(sdk, "http_get", serve("sdk_empty.json"))
+    assert sdk.fetch({}) == []           # default URL; empty page ends the walk
+    assert len(bodies) == 1
+
+    bodies.clear()
+    monkeypatch.setattr(sdk, "http_get", serve("sdk.json"))
+    sdk.fetch({"max_pages": 2})          # count says 244, but max_pages caps it
+    assert len(bodies) == 2
+
+
+def test_sdk_private_kitchen_bath_reads_the_buildings_table():
+    table = load("sdk_building.json")    # "Eget køkken ja … Eget bad ja"
+    assert sdk.private_kitchen_bath(table) is True
+    no_kitchen = table.replace("ja<br></td>", "nej<br></td>", 1)   # first row: Eget køkken
+    assert "nej<br>" in no_kitchen
+    assert sdk.private_kitchen_bath(no_kitchen) is False
+    # Newer buildings describe their rooms in prose — unknown, not "no".
+    assert sdk.private_kitchen_bath(load("sdk_building_prose.json")) is None
+
+
+def test_sdk_deep_check_fetches_only_when_asked_and_fails_open():
+    listing = sdk.parse(load("sdk.json"))[0]
+    calls = []
+
+    def get(url, body):
+        calls.append(url)
+        return body
+
+    table = load("sdk_building.json")
+    no_bath = table.replace("Eget bad</td>", "Eget bad</td><td>nej</td>").replace(
+        "&nbsp;ja&nbsp;<div", "<div")
+    assert sdk.private_kitchen_bath(no_bath) is False
+
+    assert sdk.deep_check(listing, {}, get=lambda u: get(u, no_bath)) is True
+    assert calls == []                    # option off → no building-page fetch
+    on = {"private_kitchen_bath": True}
+    assert sdk.deep_check(listing, on, get=lambda u: get(u, table)) is True
+    assert sdk.deep_check(listing, on, get=lambda u: get(u, no_bath)) is False
+    assert calls == ["https://mit.s.dk/api/v2/public/buildings/4/"] * 2
+    prose = load("sdk_building_prose.json")
+    assert sdk.deep_check(listing, on, get=lambda u: prose) is True
+
+    def boom(url):
+        raise OSError("offline")
+
+    assert sdk.deep_check(listing, on, get=boom) is True
