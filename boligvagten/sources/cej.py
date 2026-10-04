@@ -11,11 +11,23 @@ see config.example.py.
 import json
 import re
 
-from .base import Listing, fetch_all
+from .base import Listing, amenity_set, fetch_all
 
 KEY = "cej"
 LABEL = "CEJ Udlejning"
 LISTING_URL = "https://udlejning.cej.dk/boliger/{id}"
+
+# Codes from each item's "amenities" + "appliances" lists → base.AMENITY_LABELS.
+AMENITIES = {
+    "balconyOrTerrace": ("balcony",),
+    "elevator": ("elevator",),
+    "washingMachine": ("washing_machine",),
+    "washerDryer": ("washing_machine", "dryer"),
+    "dryer": ("dryer",),
+    "dishwasher": ("dishwasher",),
+    "parking": ("parking",),
+    "petsAllowed": ("pets",),
+}
 
 
 def parse(body, conf=None):
@@ -34,6 +46,9 @@ def parse(body, conf=None):
             size_m2=it.get("floorSize"),
             price_dkk=(it.get("price") or {}).get("amount"),
             url=LISTING_URL.format(id=it["id"]),
+            amenities=amenity_set(
+                (it.get("amenities") or []) + (it.get("appliances") or []), AMENITIES
+            ),
         ))
     return out
 

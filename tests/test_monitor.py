@@ -94,6 +94,35 @@ def test_notify_new_reports_required_channel_delivery(monkeypatch):
     assert monitor.notify_new([item], disabled) is True
 
 
+def test_notify_new_tags_highlights_and_lists_best_first(monkeypatch):
+    sent = {}
+
+    def send_ntfy(_cfg, _title, body, click_url=None, **_kw):
+        sent.update(body=body, click=click_url)
+        return True
+
+    monkeypatch.setattr(monitor.notify, "send_ntfy", send_ntfy)
+    cfg = types.SimpleNamespace(
+        NTFY={"enabled": True, "topic": "x"}, MACOS_NOTIFICATION=False,
+        HIGHLIGHTS=["balcony", "elevator", "washing_machine"],
+    )
+    plain = _listing(id="x:1", address="Plain 1", url="https://x.dk/1")
+    one = _listing(id="x:2", address="One 2", url="https://x.dk/2",
+                   amenities=frozenset({"elevator", "parking"}))
+    two = _listing(id="x:3", address="Two 3", url="https://x.dk/3",
+                   amenities=frozenset({"washing_machine", "balcony"}))
+    assert monitor.notify_new([plain, one, two], cfg) is True
+    lines = [line for line in sent["body"].splitlines() if line.startswith("  •")]
+    # Sorted by highlight count; tags follow HIGHLIGHTS order; un-highlighted
+    # amenities (parking) stay silent; plain listings still alert.
+    assert lines == [
+        "  • [x] Two 3 — 3r, 86m², 17.200 DKK/md  ✓ altan ✓ vaskemaskine",
+        "  • [x] One 2 — 3r, 86m², 17.200 DKK/md  ✓ elevator",
+        "  • [x] Plain 1 — 3r, 86m², 17.200 DKK/md",
+    ]
+    assert sent["click"] == "https://x.dk/3"
+
+
 def test_check_once_deep_filters_new_listings(tmp_path, monkeypatch):
     """description_keywords gates the alert but never the seen-state."""
     cfg = types.SimpleNamespace(
@@ -437,6 +466,8 @@ def test_example_config_is_complete_and_safe():
     assert set(cfg.CONTACT["sites"]) == {"cej", "kereby"}
     for site in cfg.CONTACT["sites"].values():
         assert site == {"auto_contact": False, "live_send": False}
+    # HIGHLIGHTS only names amenities the sources can actually produce.
+    assert set(cfg.HIGHLIGHTS) <= set(sources.AMENITY_LABELS)
 
 
 # ---------------------------------------------------------------- disclaimer

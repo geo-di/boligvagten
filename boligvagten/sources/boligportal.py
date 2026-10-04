@@ -9,6 +9,7 @@ title, the area/street line under it, and the bold price.
 City and filters live in the URL path/query — browse to your search on the
 site and copy the URL (see config.example.py).
 """
+import json
 import re
 
 from .base import Listing, ParserHealthError, fetch_all, known_empty_page, strip_html
@@ -19,6 +20,43 @@ BASE = "https://www.boligportal.dk"
 
 # Anchor that opens a listing card: href="/lejligheder/koebenhavn/90m2-3-vaer-id-5511000"
 CARD_RE = re.compile(r'<a\b[^>]*\shref="(/[^"]*?-id-(\d+))"[^>]*>')
+
+# The page also embeds its data as JSON; each ad there carries a "features"
+# dict of booleans. Its keys → base.AMENITY_LABELS.
+STORE_RE = re.compile(r'<script id="store" type="application/json">(.*?)</script>', re.DOTALL)
+FEATURES = {
+    "balcony": "balcony",
+    "elevator": "elevator",
+    "washing_machine": "washing_machine",
+    "dryer": "dryer",
+    "dishwasher": "dishwasher",
+    "furnished": "furnished",
+    "parking": "parking",
+    "pet_friendly": "pets",
+}
+
+
+def _amenities_by_id(body):
+    """{listing id: amenities} from the embedded store — best effort, {} if absent."""
+    m = STORE_RE.search(body)
+    if not m:
+        return {}
+    try:
+        store = json.loads(m.group(1))
+    except ValueError:
+        return {}
+    out, stack = {}, [store]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            if isinstance(node.get("id"), int) and isinstance(node.get("features"), dict):
+                out[str(node["id"])] = frozenset(
+                    FEATURES[k] for k, v in node["features"].items() if v is True and k in FEATURES
+                )
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return out
 
 
 def _price_to_int(raw):
@@ -35,6 +73,7 @@ def parse(body, conf=None):
             "Boligportal response has neither listing-card markup nor an explicit empty result"
         )
 
+    amenities = _amenities_by_id(body)
     out = []
     seen_ids = set()
     for i, m in enumerate(matches):
@@ -67,6 +106,7 @@ def parse(body, conf=None):
             size_m2=int(size_m.group(1)) if size_m else None,
             price_dkk=_price_to_int(price_m.group(1)) if price_m else None,
             url=BASE + path,
+            amenities=amenities.get(listing_id, frozenset()),
         ))
 
     if not out and not known_empty_page(body):

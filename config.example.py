@@ -48,6 +48,14 @@ FILTERS = {
     "description_keywords": [],
 }
 
+# Highlights — nice-to-haves that TAG a listing instead of filtering it out.
+# Every listing still alerts; matching ones get "✓ altan ✓ elevator" in the
+# notification and are listed first. Read from each site's structured amenity
+# data (Boligportal, CEJ, Kereby; City Apartment has none), not free text.
+# Available: balcony, elevator, washing_machine, dryer, dishwasher,
+# furnished, parking, pets.
+HIGHLIGHTS = []                     # e.g. ["balcony", "elevator", "washing_machine"]
+
 # ---------------------------------------------------------------------------
 # Sources — toggle and configure each site here.
 #

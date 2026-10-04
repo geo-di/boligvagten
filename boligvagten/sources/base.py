@@ -28,6 +28,33 @@ def known_empty_page(body):
     return any(marker in text for marker in markers)
 
 
+# Shared amenity vocabulary. Sources map their own codes onto these keys
+# (Listing.amenities); config HIGHLIGHTS picks from them, and the value is how
+# the tag reads in a notification.
+AMENITY_LABELS = {
+    "balcony": "altan",
+    "elevator": "elevator",
+    "washing_machine": "vaskemaskine",
+    "dryer": "tørretumbler",
+    "dishwasher": "opvaskemaskine",
+    "furnished": "møbleret",
+    "parking": "parkering",
+    "pets": "husdyr tilladt",
+}
+
+
+def amenity_set(codes, mapping):
+    """Map a source's amenity codes onto AMENITY_LABELS keys; unknown codes are dropped.
+
+    `mapping` values are tuples, so one code can imply several amenities
+    (a washer-dryer is both a washing machine and a dryer).
+    """
+    out = set()
+    for code in codes or ():
+        out.update(mapping.get(code, ()))
+    return frozenset(out)
+
+
 @dataclass
 class Listing:
     """One listing, normalized across all sources — rentals and for-sale alike.
@@ -50,6 +77,7 @@ class Listing:
     monthly_fee_dkk: int | None = None  # ejerudgift (sale listings)
     year_built: int | None = None
     description: str | None = None      # long free text when the source has it inline
+    amenities: frozenset = frozenset()  # AMENITY_LABELS keys, from structured site data
 
 
 def http_get(url, timeout=30):
