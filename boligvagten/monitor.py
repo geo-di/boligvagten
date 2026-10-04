@@ -271,11 +271,24 @@ def notify_title(new_items):
     return ", ".join(parts)
 
 
+def highlights(it, cfg):
+    """Labels of the HIGHLIGHTS amenities this listing has, in config order: ["altan"]."""
+    return [sources.AMENITY_LABELS[k] for k in getattr(cfg, "HIGHLIGHTS", None) or []
+            if k in it.amenities]
+
+
+def highlight_suffix(it, cfg):
+    marks = highlights(it, cfg)
+    return "  " + " ".join(f"✓ {m}" for m in marks) if marks else ""
+
+
 def notify_new(new_items, cfg):
     """Send a batch and return whether its required notification channel accepted it."""
+    # Most highlights first — the push's click-through opens the first listing.
+    new_items = sorted(new_items, key=lambda it: -len(highlights(it, cfg)))
     lines = [f"{len(new_items)} new listing(s):"]
     for it in new_items:
-        lines.append(f"  • [{it.source}] {it.address} — {meta_line(it)}")
+        lines.append(f"  • [{it.source}] {it.address} — {meta_line(it)}{highlight_suffix(it, cfg)}")
         lines.append(f"    {it.url}")
     message = "\n".join(lines)
     print(f"\n[{datetime.now().isoformat(timespec='seconds')}] {message}\n", flush=True)
@@ -489,7 +502,7 @@ def list_once(cfg):
         else:
             price = f"{_kr(it.price_dkk)}/md"
         meta = f"{it.source:<14}{price:>13}  {it.rooms or '?':>5}  {it.size_m2 or '?':>4}"
-        print(f"{meta}  {it.address}")
+        print(f"{meta}  {it.address}{highlight_suffix(it, cfg)}")
         print(f"{' ' * len(meta)}  {it.url}")
     print(f"\n{len(rows)} listing(s) right now.")
 
@@ -560,6 +573,14 @@ def run_loop(cfg, once=False, stop=None, get_cfg=None, on_cycle=None):
             "in config.py.",
             flush=True,
         )
+    unknown = [k for k in getattr(cfg, "HIGHLIGHTS", None) or []
+               if k not in sources.AMENITY_LABELS]
+    if unknown:
+        print(
+            f"[note] Unknown HIGHLIGHTS {unknown} will never match. "
+            f"Available: {', '.join(sources.AMENITY_LABELS)}.",
+            flush=True,
+        )
     offline_streak = 0
     while True:
         if get_cfg is not None:
@@ -625,6 +646,12 @@ def main(argv=None):
                     help="open the settings and status page in your browser; "
                          "closing the page stops boligvagten")
     args = ap.parse_args(argv)
+    # A console log line must never crash a check: when output is redirected on
+    # Windows (cp1252), "✓" or an odd address character would otherwise raise
+    # before the push goes out.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
 
     if args.web:
         from . import web

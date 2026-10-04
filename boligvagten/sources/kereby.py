@@ -15,7 +15,7 @@ import json
 import re
 import unicodedata
 
-from .base import Listing, ParserHealthError, fetch_all, http_get
+from .base import Listing, ParserHealthError, amenity_set, fetch_all, http_get
 
 KEY = "kereby"
 LABEL = "Kereby"
@@ -26,6 +26,32 @@ DEFAULT_URL = (
 INDEX_URL = "https://kereby.dk/bolig/"
 PAGE_URL = "https://kereby.dk/bolig/{slug}/"
 PAGES_API = "https://kereby.dk/wp-json/wp/v2/jorato-cases?per_page=100&page={page}&_fields=slug"
+
+# Codes from tenancyFacilities / propertyFacilities / appliances → base.AMENITY_LABELS.
+AMENITIES = {
+    "Balcony": ("balcony",),
+    "Elevator": ("elevator",),
+    "WashingMachine": ("washing_machine",),
+    "WasherDryer": ("washing_machine", "dryer"),
+    "Dryer": ("dryer",),
+    "Dishwasher": ("dishwasher",),
+    "Parking": ("parking",),
+}
+
+
+def _amenities(it):
+    codes = []
+    for key in ("tenancyFacilities", "propertyFacilities", "appliances"):
+        codes += [c for c in it.get(key) or [] if isinstance(c, str)]
+    found = set(amenity_set(codes, AMENITIES))
+    details = it.get("additionalDetails")
+    if not isinstance(details, dict):
+        details = {}
+    if details.get("furnished"):
+        found.add("furnished")
+    if it.get("petsAllowed") or details.get("petsAllowed"):
+        found.add("pets")
+    return frozenset(found)
 
 
 def slugify(text):
@@ -82,6 +108,7 @@ def parse(body, conf=None, slugs=None):
             size_m2=int(size) if size else None,
             price_dkk=int(rent) if rent else None,
             url=page_url(addr, slugs) or INDEX_URL,
+            amenities=_amenities(it),
         ))
     return out
 

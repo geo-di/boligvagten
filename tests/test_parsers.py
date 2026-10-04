@@ -15,7 +15,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def load(name):
-    return (FIXTURES / name).read_text()
+    return (FIXTURES / name).read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------- CEJ
@@ -36,6 +36,17 @@ def test_cej_parse_fields():
     )
     # The second item exists so filter tests can exclude it by keyword.
     assert "Ballerup" in items[1].name
+
+
+def test_cej_parse_amenities():
+    body = "data:" + json.dumps({"searchResponse": {"items": [{
+        "id": "abc",
+        "amenities": ["elevator", "balconyOrTerrace", "sharedLaundry", "courtyard"],
+        "appliances": ["washerDryer", "dishwasher", "oven"],
+    }]}})
+    (item,) = cej.parse(body)
+    # Shared laundry is not an in-unit washing machine; unknown codes drop out.
+    assert item.amenities == {"elevator", "balcony", "washing_machine", "dryer", "dishwasher"}
 
 
 def test_cej_parse_rejects_garbage():
@@ -86,6 +97,27 @@ def test_boligportal_parse_fields():
     )
     # Prices carrying øre ("12.962,68 kr.") truncate to whole kroner.
     assert items[1].price_dkk == 12962
+
+
+def test_boligportal_parse_amenities_from_embedded_store():
+    store = {"props": {"page_props": {"results": [
+        {"id": 5511000, "url": "/x-id-5511000", "features": {
+            "balcony": True, "elevator": False, "washing_machine": True,
+            "furnished": None, "pet_friendly": True, "senior_friendly": True,
+        }},
+    ]}}}
+    body = (load("boligportal.html")
+            + f'<script id="store" type="application/json">{json.dumps(store)}</script>')
+    items = boligportal.parse(body)
+    # Only explicit True counts; unmapped keys (senior_friendly) are ignored.
+    assert items[0].amenities == {"balcony", "washing_machine", "pets"}
+    # A card without a store entry simply has no amenities.
+    assert items[1].amenities == frozenset()
+
+
+def test_boligportal_parse_tolerates_broken_store():
+    body = load("boligportal.html") + '<script id="store" type="application/json">{oops</script>'
+    assert [it.amenities for it in boligportal.parse(body)] == [frozenset(), frozenset()]
 
 
 def test_boligportal_parse_empty_page():
@@ -211,6 +243,21 @@ def test_kereby_unpublished_page_links_to_the_overview_not_a_404():
     assert {it.url for it in items} == {kereby.INDEX_URL}
     assert kereby.slugify("Godthåbsvej 62B, parterre 2000") == "godthabsvej-62b-parterre-2000"
     assert kereby.slugify("Fælledvej 23, 5. th 2200") == "faelledvej-23-5-th-2200"
+
+
+def test_kereby_parse_amenities():
+    body = json.dumps({"items": [{
+        "id": "k1", "classification": "Residential", "state": "Available",
+        "tenancyFacilities": ["Balcony", "BasementRoom"],
+        "propertyFacilities": ["Elevator", "CommunalLaundry"],
+        "appliances": ["WasherDryer", "Dishwasher"],
+        "additionalDetails": {"furnished": True, "petsAllowed": False},
+        "petsAllowed": False,
+    }]})
+    (item,) = kereby.parse(body)
+    assert item.amenities == {
+        "balcony", "elevator", "washing_machine", "dryer", "dishwasher", "furnished",
+    }
 
 
 def test_kereby_parse_rejects_garbage():
